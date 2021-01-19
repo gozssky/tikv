@@ -207,7 +207,9 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         // being used, we must set them empty or disabled.
         io_options.compression_per_level(&[]);
         io_options.bottommost_compression(DBCompressionType::Disable);
-        let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
+        let mut env_opts = EnvOptions::new();
+        env_opts.set_use_direct_writes(true);
+        let mut writer = SstFileWriter::new(env_opts, io_options);
         fail_point!("on_open_sst_writer");
         writer.open(path)?;
         Ok(RocksSstWriter { writer, env })
