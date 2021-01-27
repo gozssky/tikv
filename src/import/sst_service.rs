@@ -35,6 +35,8 @@ use sst_importer::metrics::*;
 use sst_importer::service::*;
 use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
 
+use protobuf::Message;
+
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
 /// It saves the SST sent from client to a file and then sends a command to
@@ -52,6 +54,7 @@ where
     switcher: ImportModeSwitcher<E>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
+    write_limiter: Limiter,
 }
 
 impl<E, Router> ImportSSTService<E, Router>
@@ -76,6 +79,11 @@ where
             .create()
             .unwrap();
         let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
+        let max_write_bytes_per_sec = if cfg.max_write_bytes_per_sec.0 > 0 {
+            cfg.max_write_bytes_per_sec.0 as f64
+        } else {
+            INFINITY
+        };
         ImportSSTService {
             cfg,
             engine,
@@ -85,6 +93,7 @@ where
             switcher,
             limiter: Limiter::new(INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
+            write_limiter: Limiter::new(max_write_bytes_per_sec),
         }
     }
 
@@ -454,6 +463,7 @@ where
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
         let engine = self.engine.clone();
+        let limiter = self.write_limiter.clone();
         let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
         let mut rx = rx.map_err(Error::from);
 
@@ -475,16 +485,17 @@ where
                         return Err(Error::InvalidChunk);
                     }
                 };
-                let writer = rx
-                    .try_fold(writer, |mut writer, req| async move {
+                let (writer, _) = rx
+                    .try_fold((writer, limiter), |(mut writer, limiter), req| async move {
                         let start = Instant::now_coarse();
                         let batch = match req.chunk {
                             Some(Chunk::Batch(b)) => b,
                             _ => return Err(Error::InvalidChunk),
                         };
+                        limiter.consume(batch.compute_size() as usize).await;
                         writer.write(batch)?;
                         IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
-                        Ok(writer)
+                        Ok((writer, limiter))
                     })
                     .await?;
 

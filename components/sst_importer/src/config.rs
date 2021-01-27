@@ -2,7 +2,7 @@
 
 use std::error::Error;
 use std::result::Result;
-use tikv_util::config::ReadableDuration;
+use tikv_util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
@@ -14,6 +14,8 @@ pub struct Config {
     ///
     /// Default is 10m.
     pub import_mode_timeout: ReadableDuration,
+    /// The max bytes can be wrote per seconds. Zero means unlimited.
+    pub max_write_bytes_per_sec: ReadableSize,
 }
 
 impl Default for Config {
@@ -22,6 +24,7 @@ impl Default for Config {
             num_threads: 8,
             stream_channel_window: 128,
             import_mode_timeout: ReadableDuration::minutes(10),
+            max_write_bytes_per_sec: ReadableSize(0),
         }
     }
 }
